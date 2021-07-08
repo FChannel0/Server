@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"crypto"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -10,10 +11,9 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"math/rand"
+	"image/color"
 	"net/smtp"
 	"os"
-	"os/exec"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -23,7 +23,8 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
-)
+
+	"github.com/mojocn/base64Captcha")
 
 
 type Verify struct {
@@ -389,52 +390,23 @@ func CreateNewCaptcha(db *sql.DB){
 			break
 		}
 	}
-	
-	captcha := Captcha()
+	textDriver := base64Captcha.NewDriverString(98, 200, 35, base64Captcha.OptionShowHollowLine | base64Captcha.OptionShowSineLine | base64Captcha.OptionShowSlimeLine, 4, "ABEFHKMNPQRSUVWXYZ#$&", &color.RGBA{}, []string{"chromohv.ttf", "DeborahFancyDress.ttf", "RitaSmith.ttf", "wqy-microhei.ttc"})
+	c := base64Captcha.NewCaptcha(textDriver, base64Captcha.DefaultMemStore)
 
-	var pattern string
-	rnd := fmt.Sprintf("%d", rand.Intn(3))
-
-	srnd := string(rnd)
-
-	switch srnd {
-	case "0" :
-		pattern = "pattern:verticalbricks"
-		break
-
-	case "1" :
-		pattern = "pattern:verticalsaw"
-		break
-		
-	case "2" :
-		pattern = "pattern:hs_cross"
-		break		
-
-	}
-	
-	cmd := exec.Command("convert", "-size", "200x98", pattern, "-transparent", "white", file)
-
-	err := cmd.Run()
-
-	CheckError(err, "error with captcha first pass")
-	
-	cmd  = exec.Command("convert", file, "-fill", "blue", "-pointsize", "62", "-annotate", "+0+70", captcha, "-tile", "pattern:left30", "-gravity", "center", "-transparent", "white", file)
-
-	err = cmd.Run()
-
-	CheckError(err, "error with captcha second pass")
-
-	rnd = fmt.Sprintf("%d", rand.Intn(24) - 12)
-	
-	cmd  = exec.Command("convert", file, "-rotate", rnd, "-wave", "5x35", "-distort", "Arc", "20", "-wave", "2x35", "-transparent", "white", file)
-
-	err = cmd.Run()
-
-	CheckError(err, "error with captcha third pass")	
+	_, content, answer := Captcha(c)
+	image, err := c.Driver.DrawCaptcha(content)
+	CheckError(err, "failed to draw captcha")
+	fileId, err := os.Create(file)
+	CheckError(err, "failed to create captcha image")
+	writer := bufio.NewWriter(fileId)
+	_, err = image.WriteTo(writer)
+	CheckError(err, "failed to write captcha image")
+	err = writer.Flush()
+	CheckError(err, "failed to write captcha image")
 
 	var verification Verify
 	verification.Type         = "captcha"	
-	verification.Code         = captcha
+	verification.Code         = answer
 	verification.Identifier = file
 
 	CreateVerification(db, verification)
@@ -483,16 +455,8 @@ func BoardHasAuthType(db *sql.DB, board string, auth string) bool {
 	return false
 }
 
-func Captcha() string {
-	rand.Seed(time.Now().UTC().UnixNano())
-	domain := "ABEFHKMNPQRSUVWXYZ#$&"
-	rng := 4
-	newID := ""
-	for i := 0; i < rng; i++ {
-		newID += string(domain[rand.Intn(len(domain))])
-	}
-	
-	return newID
+func Captcha(driver *base64Captcha.Captcha) (string, string, string) {
+	return driver.Driver.GenerateIdQuestionAnswer()
 }	
 
 func CreatePem(db *sql.DB, actor Actor) {
